@@ -10,7 +10,13 @@ import params
 
 
 class M1_VAE(nn.Module):
-    def __init__(self, latent_dim, device):
+    def __init__(self,
+                 latent_dim,
+                 device,
+                 convolutional_layers_encoder,
+                 convolutional_layers_decoder,
+                 sample_space_flatten,
+                 sample_space):
         """Initialize a VAE.
 
         Args:
@@ -20,10 +26,8 @@ class M1_VAE(nn.Module):
         super(M1_VAE, self).__init__()
         self.device = device
         self.latent_dim = latent_dim
-        convolutional_layers_encoder = params.Params.ENCODER_CONVOLUTIONS
-        sample_space_flatten = params.Params.SAMPLE_SPACE_FLATTEN
         self.sample_space_flatten = sample_space_flatten
-        self.sample_space = params.Params.IMAGE_SAPCE
+        self.sample_space = sample_space
         self.encoder = nn.Sequential(
             nn.Conv2d(*convolutional_layers_encoder[0:4]),  # B,  32, 28, 28
             nn.ReLU(True),
@@ -36,7 +40,6 @@ class M1_VAE(nn.Module):
         self.logvar = nn.Linear(sample_space_flatten, latent_dim)
 
         self.upsample = nn.Linear(latent_dim, sample_space_flatten)
-        convolutional_layers_decoder = params.Params.DECODER_CONVOLUTIONS
         self.decoder = nn.Sequential(
             nn.ConvTranspose2d(*convolutional_layers_decoder[0:4]),  # B,  64,  14,  14
             nn.ReLU(True),
@@ -53,9 +56,9 @@ class M1_VAE(nn.Module):
         :param logvar: z logstd, None for prior (init with zeros)
         :return:
         '''
-        if mu == None:
+        if mu is None:
             mu = torch.zeros((sample_size, self.latent_dim)).to(self.device)
-        if logvar == None:
+        if logvar is None:
             logvar = torch.zeros((sample_size, self.latent_dim)).to(self.device)
 
         up_sampled = self.z_sample(mu, logvar)
@@ -74,7 +77,7 @@ class M1_VAE(nn.Module):
         reproduction_loss = nn.functional.binary_cross_entropy(recon, x, reduction='sum')
         KLD = - 0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
 
-        return (reproduction_loss + KLD)
+        return reproduction_loss + KLD
 
     def forward(self, x):
         encoded_image = self.encoder(x)
