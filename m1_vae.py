@@ -6,8 +6,21 @@
 import torch
 import torch.nn as nn
 
-import params
+class M1_VAE_Classifier(nn.Module):
 
+
+    def __init__(self, latent_dim, num_of_classes):
+        super(M1_VAE_Classifier, self).__init__()
+        self.classifier = nn.Sequential(
+            nn.Linear(latent_dim, num_of_classes),
+            nn.Softmax(dim=None)
+        )
+
+    def forward(self, x):
+        return self.classifier(x)
+
+    def loss(self, preds, labels):
+        return nn.functional.cross_entropy(input=preds, target=labels)
 
 class M1_VAE(nn.Module):
     def __init__(self,
@@ -29,11 +42,11 @@ class M1_VAE(nn.Module):
         self.sample_space_flatten = sample_space_flatten
         self.sample_space = sample_space
         self.encoder = nn.Sequential(
-            nn.Conv2d(*convolutional_layers_encoder[0:4]),  # B,  32, 28, 28
+            nn.Conv2d(*convolutional_layers_encoder[0:5]),
             nn.ReLU(True),
-            nn.Conv2d(*convolutional_layers_encoder[5:9]),  # B,  32, 14, 14
+            nn.Conv2d(*convolutional_layers_encoder[5:10]),
             nn.ReLU(True),
-            nn.Conv2d(*convolutional_layers_encoder[10:14]),  # B,  64,  7, 7
+            nn.Conv2d(*convolutional_layers_encoder[10:15]),
         )
 
         self.mu = nn.Linear(sample_space_flatten, latent_dim)
@@ -41,13 +54,16 @@ class M1_VAE(nn.Module):
 
         self.upsample = nn.Linear(latent_dim, sample_space_flatten)
         self.decoder = nn.Sequential(
-            nn.ConvTranspose2d(*convolutional_layers_decoder[0:4]),  # B,  64,  14,  14
+            nn.ConvTranspose2d(*convolutional_layers_decoder[:5]),
             nn.ReLU(True),
-            nn.ConvTranspose2d(*convolutional_layers_decoder[5:10]),  # B,  32, 28, 28
+            nn.ConvTranspose2d(*convolutional_layers_decoder[5:11]),
             nn.ReLU(True),
-            nn.ConvTranspose2d(*convolutional_layers_decoder[11:15]),  # B, 1, 28, 28
+            nn.ConvTranspose2d(*convolutional_layers_decoder[11:]),
             nn.Sigmoid()
         )
+
+
+
 
     def sample(self, sample_size, mu=None, logvar=None):
         '''
@@ -65,12 +81,15 @@ class M1_VAE(nn.Module):
         decoded_images = self.decoder(up_sampled)
         return decoded_images
 
-    def z_sample(self, mu, logvar):
+    def reparametize(self, mu, logvar):
         std = torch.exp(0.5 * logvar)
         eps = torch.randn_like(std)
-        latent_result = mu + eps * std
+        return mu + eps * std
+
+    def z_sample(self, mu, logvar):
+        latent_result = self.reparametize(mu, logvar)
         upsampled = self.upsample(latent_result)
-        upsampled = upsampled.view(-1, self.image_sapce)
+        upsampled = upsampled.view(-1, *self.sample_space)
         return upsampled
 
     def loss(self, x, recon, mu, logvar):
@@ -82,8 +101,8 @@ class M1_VAE(nn.Module):
     def forward(self, x):
         encoded_image = self.encoder(x)
 
-        mu = self.mu(encoded_image.view(-1, self.sample_space))
-        logvar = self.logvar(encoded_image.view(-1, self.sample_space))
+        mu = self.mu(encoded_image.view(-1, self.sample_space_flatten))
+        logvar = self.logvar(encoded_image.view(-1, self.sample_space_flatten))
         z = self.z_sample(mu, logvar)
         recon = self.decoder(z)
         return recon, mu, logvar

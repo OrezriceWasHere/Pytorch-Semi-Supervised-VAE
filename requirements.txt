@@ -1,6 +1,8 @@
-torch
+torch ; sys_platform == 'darwin' or sys_platform == 'windows'
 tqdm
-torchvision
+torchvision ; sys_platform == 'darwin' or sys_platform == 'windows'
 matplotlib
 clearml
 matplotlib
+scikit-learn
+pil

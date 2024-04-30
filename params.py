@@ -8,3 +8,4 @@ class Params:
     DECODER_CONVOLUTIONS = [64, 32, 4, 2, 1, 32, 32, 4, 2, 1, 1 ,32,  1, 4, 1, 2]
     EPOCHS = 50
     LR = 1e-3
+    SUPERVISED_DATASET_FACTOR = 7
