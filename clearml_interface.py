@@ -10,8 +10,8 @@ def clearml_init():
     global execution_task
     if ALLOW_CLEARML:
         execution_task = Task.init(project_name="Pytorch Semi Supervised VAE",
-                                   task_name="classifier",
-                                   task_type=Task.TaskTypes.optimizer,
+                                   task_name="with classification after generation is done - 3000 images",
+                                   task_type=Task.TaskTypes.testing,
                                    reuse_last_task_id=False)
         execution_task.set_parameters_as_dict(params.Params.__dict__)
 

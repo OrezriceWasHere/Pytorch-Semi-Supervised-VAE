@@ -52,16 +52,12 @@ def produce_images(vae, epoch, filename):
     clearml_interface.clearml_display_image(image, epoch, f'epoch{epoch}', series='generation_images')
 
 
-def train(vae,
-          classifier_model,
-          classifier_optmizer,
+def train_generation(vae,
           trainloader,
-          optimizer,
-          supervised_training_factor):
+          optimizer
+          ):
     vae.train()  # set to training mode
-    classifier_model.train()
     generation_loss_list, classification_loss_list = [], []
-    predictions, ground_truth = [], []
     for index, (inputs, labels) in enumerate(trainloader):
         batch_size = params.Params.BATCH_SIZE
         inputs = inputs.to(vae.device)
@@ -73,32 +69,30 @@ def train(vae,
         generation_loss.backward()
         optimizer.step()
 
-        if index % supervised_training_factor == 0:
-            labels = labels.to(vae.device)
-            latent = vae.reparametize(mu, logvar)
-            latent = latent.detach().clone()
-            preds = classifier_model(latent)
-            predictions.extend(torch.argmax(preds, dim=-1).cpu().tolist())
-            ground_truth.extend(labels.cpu().tolist())
-            classification_loss = classifier_model.loss(preds, labels)
-            classifier_optmizer.zero_grad()
-            classification_loss.backward()
-            classifier_optmizer.step()
-            classification_loss_list.append(classification_loss.item() / batch_size)
+        # if index % supervised_training_factor == 0:
+        #     labels = labels.to(vae.device)
+        #     latent = vae.reparametize(mu, logvar)
+        #     latent = latent.detach().clone()
+        #     preds = classifier_model(latent)
+        #     predictions.extend(torch.argmax(preds, dim=-1).cpu().tolist())
+        #     ground_truth.extend(labels.cpu().tolist())
+        #     classification_loss = classifier_model.loss(preds, labels)
+        #     classifier_optmizer.zero_grad()
+        #     classification_loss.backward()
+        #     classifier_optmizer.step()
+        #     classification_loss_list.append(classification_loss.item() / batch_size)
 
     return {
-        "avg_gen_loss": sum(generation_loss_list) / len(generation_loss_list),
-        "avg_cls_loss": sum(classification_loss_list) / len(classification_loss_list),
-        "predictions": predictions,
-        "ground_truth": ground_truth
+        "avg_gen_loss": sum(generation_loss_list) / len(generation_loss_list)
+        # "avg_cls_loss": sum(classification_loss_list) / len(classification_loss_list),
+        # "predictions": predictions,
+        # "ground_truth": ground_truth
     }
 
 
-def test(vae, classifier_model, testloader, epoch, filename, supervised_training_factor):
+def test_generation(vae, testloader, epoch, filename):
     vae.eval()
-    classifier_model.eval()
     gen_loss_list, cls_loss_list = [], []
-    predictions, ground_truth = [], []
     produce_images(vae, epoch, filename)
     for index, (inputs, labels) in enumerate(testloader):
         batch_size = inputs.size(0)
@@ -107,32 +101,73 @@ def test(vae, classifier_model, testloader, epoch, filename, supervised_training
         gen_loss = vae.loss(inputs, outputs, mu, logvar)
         gen_loss_list.append(gen_loss.item() / batch_size)
 
+    return {
+        "avg_gen_loss": sum(gen_loss_list) / len(gen_loss_list)
+        # "avg_cls_loss": sum(cls_loss_list) / len(cls_loss_list)
+    }
+
+def train_classification(vae, classifier_model, trainloader, optimizer, supervised_training_factor):
+    vae.eval()  # set to training mode
+    classifier_model.train()
+    classification_loss_list = []
+    predictions, ground_truth = [], []
+    for index, (inputs, labels) in enumerate(trainloader):
+        batch_size = inputs.size(0)
         if index % supervised_training_factor == 0:
+            inputs = inputs.to(vae.device)
+            outputs, mu, logvar = vae(inputs)
             labels = labels.to(vae.device)
             latent = vae.reparametize(mu, logvar)
+            latent = latent.detach().clone()
             preds = classifier_model(latent)
-            cls_loss = classifier_model.loss(preds, labels)
-            cls_loss_list.append(cls_loss.item() / batch_size)
             predictions.extend(torch.argmax(preds, dim=-1).cpu().tolist())
             ground_truth.extend(labels.cpu().tolist())
+            classification_loss = classifier_model.loss(preds, labels)
+            optimizer.zero_grad()
+            classification_loss.backward()
+            optimizer.step()
+            classification_loss_list.append(classification_loss.item() / batch_size)
 
     return {
-        "avg_gen_loss": sum(gen_loss_list) / len(gen_loss_list),
+        "avg_cls_loss": sum(classification_loss_list) / len(classification_loss_list),
+        "predictions": predictions,
+        "ground_truth": ground_truth
+    }
+
+def test_classification(vae, classifier_model, testloader):
+    vae.eval()
+    classifier_model.eval()
+    cls_loss_list = []
+    predictions, ground_truth = [], []
+    for index, (inputs, labels) in enumerate(testloader):
+        batch_size = inputs.size(0)
+        inputs = inputs.to(vae.device)
+        outputs, mu, logvar = vae(inputs)
+        labels = labels.to(vae.device)
+        latent = vae.reparametize(mu, logvar)
+        preds = classifier_model(latent)
+        predictions.extend(torch.argmax(preds, dim=-1).cpu().tolist())
+        ground_truth.extend(labels.cpu().tolist())
+        classification_loss = classifier_model.loss(preds, labels)
+        cls_loss_list.append(classification_loss.item() / batch_size)
+
+    return {
         "avg_cls_loss": sum(cls_loss_list) / len(cls_loss_list),
         "predictions": predictions,
         "ground_truth": ground_truth
     }
 
-
-
-def log_results(train_results, test_results, epoch):
+def log_results_generation(train_results, test_results, epoch):
     train_gen_loss = train_results['avg_gen_loss']
-    train_cls_loss = train_results['avg_cls_loss']
     test_gen_loss = test_results['avg_gen_loss']
-    test_cls_loss = test_results['avg_cls_loss']
     clearml_interface.add_point_to_graph('train_gen_loss', 'train_gen_loss', epoch, train_gen_loss)
-    clearml_interface.add_point_to_graph('train_cls_loss', 'train_cls_loss', epoch, train_cls_loss)
     clearml_interface.add_point_to_graph('test_gen_loss', 'test_gen_loss', epoch, test_gen_loss)
+
+def log_results_classification(train_results, test_results, epoch):
+    train_cls_loss = train_results['avg_cls_loss']
+    test_cls_loss = test_results['avg_cls_loss']
+    clearml_interface.add_point_to_graph('train_cls_loss', 'train_cls_loss', epoch, train_cls_loss)
+
     clearml_interface.add_point_to_graph('test_cls_loss', 'test_cls_loss', epoch, test_cls_loss)
     test_matrix = confusion_matrix(test_results['ground_truth'], test_results['predictions'])
     clearml_interface.add_confusion_matrix(test_matrix, 'test_confusion_matrix', 'test_confusion_matrix', epoch)
@@ -140,8 +175,6 @@ def log_results(train_results, test_results, epoch):
     clearml_interface.add_confusion_matrix(train_matrix, 'train_confusion_matrix', 'train_confusion_matrix', epoch)
     test_classification_report = classification_report(test_results['ground_truth'], test_results['predictions'])
     clearml_interface.add_text(test_classification_report, 'test_classification_report', epoch)
-    train_classification_report = classification_report(train_results['ground_truth'], train_results['predictions'])
-    clearml_interface.add_text(train_classification_report, 'train_classification_report', epoch)
 
 
 
@@ -170,11 +203,17 @@ def main():
     classifier_optimizer = torch.optim.Adam(
         classifier_model.parameters(), lr=params.Params.LR)
 
+    supervised_training_factor = params.Params.SUPERVISED_DATASET_FACTOR
+
     for e in tqdm(range(epochs)):
-        supervised_training_factor = params.Params.SUPERVISED_DATASET_FACTOR
-        train_report = train(m1_model, classifier_model, classifier_optimizer,  trainloader, optimizer, supervised_training_factor)
-        test_report = test(m1_model, classifier_model,  testloader, e, filename, supervised_training_factor)
-        log_results(train_report, test_report, e)
+        train_report = train_generation(m1_model,   trainloader, optimizer)
+        test_report = test_generation(m1_model,  testloader, e, filename)
+        log_results_generation(train_report, test_report, e)
+
+    for e in tqdm(range(epochs)):
+        train_report = train_classification(m1_model, classifier_model, trainloader, classifier_optimizer, supervised_training_factor)
+        test_report = test_classification(m1_model, classifier_model, testloader)
+        log_results_classification(train_report, test_report, e)
 
 
 if __name__ == "__main__":
