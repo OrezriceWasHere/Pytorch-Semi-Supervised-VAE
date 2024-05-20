@@ -9,7 +9,7 @@ import os
 import argparse
 from uuid import uuid4
 
-from PIL.Image import Image
+from PIL import Image
 from tqdm import tqdm
 import pprint
 import copy
@@ -25,7 +25,7 @@ from torch.utils.data import DataLoader
 from torchvision.datasets import MNIST
 from torchvision.utils import save_image, make_grid
 
-from clearml_interface import clearml_init
+from clearml_interface import clearml_init, clearml_display_image
 
 parser = argparse.ArgumentParser()
 
@@ -52,7 +52,7 @@ parser.add_argument('--hidden_dim', type=int, default=500, help='Size of the hid
 # training params
 parser.add_argument('--n_labeled', type=int, default=3000, help='Number of labeled training examples in the dataset')
 parser.add_argument('--batch_size', type=int, default=100)
-parser.add_argument('--n_epochs', type=int, default=100, help='Number of epochs to train.')
+parser.add_argument('--n_epochs', type=int, default=20, help='Number of epochs to train.')
 parser.add_argument('--lr', type=float, default=3e-4, help='Learning rate')
 parser.add_argument('--alpha', type=float, default=0.1, help='Classifier loss multiplier controlling generative vs. discriminative learning.')
 
@@ -110,7 +110,7 @@ def fetch_dataloaders(args):
     kwargs = {'num_workers': 1, 'pin_memory': True} if args.device.type is 'cuda' else {}
 
     def get_dataset(train):
-        return MNIST(root=args.data_dir, train=train, transform=transforms)
+        return MNIST(root=args.data_dir, train=train, transform=transforms, download=True)
 
     def get_dl(dataset):
         return DataLoader(dataset, batch_size=args.batch_size, shuffle=dataset.train, drop_last=True, **kwargs)
@@ -374,7 +374,7 @@ def clearml_save_image(tensor, description):
     os.makedirs(os.path.dirname(write_file), exist_ok=True)
     torchvision.utils.save_image(torchvision.utils.make_grid(tensor), write_file)
     image = Image.open(write_file)
-    clearml_interface.clearml_display_image(image, 1, description, series='generation_images')
+    clearml_display_image(image, 1, description, series='generation_images')
 
 
 # --------------------
@@ -415,14 +415,11 @@ if __name__ == '__main__':
     print(pprint.pformat(args.__dict__), file=open(args.results_file, 'a'))
     print(model, file=open(args.results_file, 'a'))
 
-    if args.train:
-        train_and_evaluate(model, labeled_dataloader, unlabeled_dataloader, test_dataloader, loss_components_fn, optimizer, args)
+    train_and_evaluate(model, labeled_dataloader, unlabeled_dataloader, test_dataloader, loss_components_fn, optimizer, args)
 
-    if args.evaluate:
-        evaluate(model, test_dataloader, None, args)
+    # evaluate(model, test_dataloader, None, args)
 
-    if args.generate:
-        generate(model, test_dataloader.dataset, args)
+    # if args.generate:
+    #     generate(model, test_dataloader.dataset, args)
 
-    if args.vis_styles:
-        vis_styles(model, args)
+    vis_styles(model, args)
