@@ -9,8 +9,9 @@ RUNNING_REMOTE = True if env.get("RUNNING_REMOTE") == "yes" else False
 def clearml_init():
     global execution_task
     if ALLOW_CLEARML:
+        experiment_desc = input("what is the experiment description?")
         execution_task = Task.init(project_name="Pytorch Semi Supervised VAE",
-                                   task_name="with classification after generation is done - 3000 images",
+                                   task_name=experiment_desc,
                                    task_type=Task.TaskTypes.testing,
                                    reuse_last_task_id=False)
         execution_task.set_parameters_as_dict(params.Params.__dict__)
