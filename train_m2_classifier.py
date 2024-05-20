@@ -9,6 +9,8 @@ import params
 from m1_vae import M1_VAE, M1_VAE_Classifier
 import os
 
+from m2_vae import M2_VAE
+
 
 def with_noise(x):
     return x + torch.zeros_like(x).uniform_(0., 1. / 256.)
@@ -24,12 +26,17 @@ def get_dataset(batch_size, dataset_name='mnist'):
     if dataset_name == 'mnist':
         trainset = torchvision.datasets.MNIST(root='./data/MNIST',
                                               train=True, download=True, transform=transform)
-        trainloader = torch.utils.data.DataLoader(trainset,
-                                                  batch_size=batch_size, shuffle=True, num_workers=2)
         testset = torchvision.datasets.MNIST(root='./data/MNIST',
                                              train=False, download=True, transform=transform)
-        testloader = torch.utils.data.DataLoader(testset,
-                                                 batch_size=batch_size, shuffle=False, num_workers=2)
+
+    number_of_classes = params.Params.NUMBER_OF_CLASSES
+
+    # dataset.targets[dataset.targets > 5] = 5
+
+    trainloader = torch.utils.data.DataLoader(trainset,
+                                            batch_size=batch_size, shuffle=True, num_workers=2)
+    testloader = torch.utils.data.DataLoader(testset,
+                                            batch_size=batch_size, shuffle=False, num_workers=2)
 
     return trainloader, testloader
 
@@ -171,12 +178,15 @@ def main():
     epochs = params.Params.EPOCHS
 
     m1_model = \
-        M1_VAE(latent_dim=params.Params.LATENT_DIM,
+        M2_VAE(latent_dim=params.Params.LATENT_DIM,
                device=device,
                convolutional_layers_encoder=params.Params.ENCODER_CONVOLUTIONS,
                convolutional_layers_decoder=params.Params.DECODER_CONVOLUTIONS,
                sample_space_flatten=params.Params.SAMPLE_SPACE_FLATTEN,
-               sample_space=params.Params.SAMPLE_SPACE).to(device)
+               sample_space=params.Params.SAMPLE_SPACE,
+               classification_embedding_dim=params.Params.EMBEDDING_DIM,
+               num_of_classes=params.Params.NUMBER_OF_CLASSES
+               ).to(device)
 
     filename = str(uuid.uuid4())
     print('images uuid: ', filename)
