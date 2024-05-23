@@ -39,17 +39,17 @@ def get_device():
 
 
 def produce_images(vae, epoch, filename):
-    sample_shape = [1, 28, 28]
+    sample_shape = params.Params.SAMPLE_SPACE
 
     samples = vae.sample(sample_size=100).cpu()
     a, b = samples.min(), samples.max()
     samples = (samples - a) / (b - a + 1e-10)
-    samples = samples.view(-1, sample_shape[0], sample_shape[1], sample_shape[2])
+    samples = samples.view(-1, *sample_shape)
     write_file = f'./samples/{filename}/epoch{epoch}.png'
     os.makedirs(os.path.dirname(write_file), exist_ok=True)
     torchvision.utils.save_image(torchvision.utils.make_grid(samples), write_file)
     image = Image.open(write_file)
-    clearml_interface.clearml_display_image(image, epoch, f'epoch{epoch}', series='generation_images')
+    clearml_interface.clearml_display_image(image, epoch, description='epoch{epoch}', series='generation_images')
 
 
 def train_generation(vae,
@@ -77,7 +77,7 @@ def train_generation(vae,
 def test_generation(vae, testloader, epoch, filename):
     vae.eval()
     gen_loss_list, cls_loss_list = [], []
-    produce_images(vae, epoch, filename)
+    # produce_images(vae, epoch, filename)
     for index, (inputs, labels) in enumerate(testloader):
         batch_size = inputs.size(0)
         inputs = inputs.to(vae.device)
@@ -168,33 +168,37 @@ def main():
     batch_size = params.Params.BATCH_SIZE
     trainloader, testloader = get_dataset(batch_size, 'mnist')
 
-    epochs = params.Params.EPOCHS
+    generation_epochs = params.Params.GENERATION_EPOCHS
+    classification_epochs = params.Params.CLASSIFICATION_EPOCHS
+    latent_space = params.Params.LATENT_DIM
+    number_of_classes = params.Params.NUMBER_OF_CLASSES
 
     m1_model = \
-        M1_VAE(latent_dim=params.Params.LATENT_DIM,
+        M1_VAE(latent_space=params.Params.LATENT_DIM,
                device=device,
                convolutional_layers_encoder=params.Params.ENCODER_CONVOLUTIONS,
                convolutional_layers_decoder=params.Params.DECODER_CONVOLUTIONS,
-               sample_space_flatten=params.Params.SAMPLE_SPACE_FLATTEN,
-               sample_space=params.Params.SAMPLE_SPACE).to(device)
+               encoder_decoder_z_space=params.Params.ENCODER_DECODER_Z_SPACE
+               ).to(device)
 
     filename = str(uuid.uuid4())
     print('images uuid: ', filename)
 
     optimizer = torch.optim.Adam(m1_model.parameters(), lr=params.Params.LR)
 
-    classifier_model = M1_VAE_Classifier(latent_dim=params.Params.LATENT_DIM, num_of_classes=10).to(device)
+    classifier_model = M1_VAE_Classifier(latent_space=latent_space, num_of_classes=number_of_classes).to(device)
     classifier_optimizer = torch.optim.Adam(
         classifier_model.parameters(), lr=params.Params.LR)
 
     supervised_training_factor = params.Params.SUPERVISED_DATASET_FACTOR
 
-    for e in tqdm(range(epochs)):
+    for e in tqdm(range(generation_epochs)):
         train_report = train_generation(m1_model,   trainloader, optimizer)
         test_report = test_generation(m1_model,  testloader, e, filename)
         log_results_generation(train_report, test_report, e)
+        produce_images(m1_model, generation_epochs, filename)
 
-    for e in tqdm(range(epochs)):
+    for e in tqdm(range(classification_epochs)):
         train_report = train_classification(m1_model, classifier_model, trainloader, classifier_optimizer, supervised_training_factor)
         test_report = test_classification(m1_model, classifier_model, testloader)
         log_results_classification(train_report, test_report, e)
