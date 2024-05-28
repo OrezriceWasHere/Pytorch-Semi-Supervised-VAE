@@ -87,6 +87,15 @@ def create_semisupervised_datasets(dataset, n_labeled, batch_size):
 
     labeled_loader = torch.utils.data.DataLoader(labeled_dataset,
                                               batch_size=batch_size, shuffle=True, num_workers=2)
+
+    for x, y in labeled_loader:
+        print(x.shape)
+
     unlabeled_loader = torch.utils.data.DataLoader(unlabeled_dataset,
                                                 batch_size=batch_size, shuffle=True, num_workers=2)
     return labeled_loader, unlabeled_loader
+
+def one_hot(x, label_size):
+    out = torch.nn.functional.one_hot(len(x), label_size).to(x.device)
+    out[torch.arange(len(x)), x.squeeze()] = 1
+    return out

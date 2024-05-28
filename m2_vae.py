@@ -87,10 +87,10 @@ class M2_VAE(Module):
         y_probs = self.encode_y(x).probs
         return y_probs.max(dim=1)[1]  # return pred labels = argmax
 
-
-def loss_components_fn(x, y, z, p_y, p_z, p_x_yz, q_z_xy):
-    # SSL paper eq 6 for an given y (observed or enumerated from q_y)
-    return - p_x_yz.log_prob(x).sum(1) \
-        - p_y.log_prob(y) \
-        - p_z.log_prob(z).sum(1) \
-        + q_z_xy.log_prob(z).sum(1)
+    @staticmethod
+    def loss_components_fn(x, y, z, p_y, p_z, p_x_yz, q_z_xy):
+        # SSL paper eq 6 for an given y (observed or enumerated from q_y)
+        return - p_x_yz.log_prob(x).sum(1) \
+            - p_y.log_prob(y) \
+            - p_z.log_prob(z).sum(1) \
+            + q_z_xy.log_prob(z).sum(1)

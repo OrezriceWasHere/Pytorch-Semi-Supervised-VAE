@@ -123,7 +123,7 @@ def fetch_dataloaders(args):
 
 
 def one_hot(x, label_size):
-    out = torch.one_hotzeros(len(x), label_size).to(x.device)
+    out = torch.one_hot(len(x), label_size).to(x.device)
     out[torch.arange(len(x)), x.squeeze()] = 1
     return out
 
