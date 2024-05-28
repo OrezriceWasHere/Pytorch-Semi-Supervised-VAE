@@ -1,95 +1,96 @@
-from torch.nn import Module, Sequential, Conv2d, ReLU, ConvTranspose2d, Sigmoid, Linear, Embedding, BatchNorm2d
+from torch.nn import Module
 import torch
-
-class M2_VAE_Classifier(Module):
-    def __init__(self):
-        super(M2_VAE_Classifier, self).__init__()
-        self.classifier = Sequential(
-            torch.nn.Dropout2d(),
-            Conv2d(1, 32, 3, 1),
-            BatchNorm2d(32),
-            
-        )
-
-    def forward(self, x):
-        return self.classifier(x)
-
-    def loss(self, preds, labels):
-        return nn.functional.cross_entropy(input=preds, target=labels)
+import torch.nn as nn
+import torch.distributions as D
 
 
 class M2_VAE(Module):
+    """
+    Data model (SSL paper eq 2):
+        p(y) = Cat(y|pi)
+        p(z) = Normal(z|0,1)
+        p(x|y,z) = f(x; z,y,theta)
+
+    Recognition model / approximate posterior q_phi (SSL paper eq 4):
+        q(y|x) = Cat(y|pi_phi(x))
+        q(z|x,y) = Normal(z|mu_phi(x,y), diag(sigma2_phi(x)))
+
+
+    """
+
     def __init__(self,
-                 latent_dim,
-                 classification_embedding_dim,
-                 num_of_classes,
-                 device,
-                 convolutional_layers_encoder,
-                 convolutional_layers_decoder,
-                 sample_space_flatten,
-                 sample_space):
-        """Initialize a VAE.
+                 number_of_classes,
+                 sample_space,
+                 latent_space,
+                 hidden_space,
+                 device
+                 ):
+        super().__init__()
+        C, H, W = sample_space
+        x_space = C * H * W
 
-        Args:
-            latent_dim: dimension of embedding
-            device: run on cpu or gpu
-        """
-        super(M2_VAE, self).__init__()
-        self.device = device
-        self.latent_dim = latent_dim
-        self.classification_embedding_dim = classification_embedding_dim
-        self.num_of_classes = num_of_classes
-        self.sample_space_flatten = sample_space_flatten
-        self.sample_space = sample_space
-        self.encoder = Sequential(
-            Conv2d(*convolutional_layers_encoder[:5]),
-            ReLU(True),
-            Conv2d(*convolutional_layers_encoder[5:10]),
-            ReLU(True),
-            Conv2d(*convolutional_layers_encoder[10:]),
-        )
+        # --------------------
+        # p model -- SSL paper generative semi supervised model M2
+        # --------------------
 
-        self.label_embedding = Embedding(num_of_classes, classification_embedding_dim)
+        self.p_y = D.OneHotCategorical(probs=1 / number_of_classes * torch.ones(1, number_of_classes, device=device))
+        self.p_z = D.Normal(torch.tensor(0., device=device), torch.tensor(1., device=device))
 
-        self.mu = Linear(sample_space_flatten + classification_embedding_dim, latent_dim)
-        self.logvar = Linear(sample_space_flatten + classification_embedding_dim, latent_dim)
+        # parametrized data likelihood p(x|y,z)
+        self.decoder = nn.Sequential(nn.Linear(latent_space + number_of_classes, hidden_space),
+                                     nn.Softplus(),
+                                     nn.Linear(hidden_space, hidden_space),
+                                     nn.Softplus(),
+                                     nn.Linear(hidden_space, x_space))
 
-        self.upsample = Linear(latent_dim, sample_space_flatten)
-        self.decoder = Sequential(
-            ConvTranspose2d(*convolutional_layers_decoder[:5]),
-            ReLU(True),
-            ConvTranspose2d(*convolutional_layers_decoder[5:11]),
-            ReLU(True),
-            ConvTranspose2d(*convolutional_layers_decoder[11:]),
-            Sigmoid()
-        )
+        # --------------------
+        # q model -- SSL paper eq 4
+        # --------------------
 
-    def sample(self, sample_size, mu=None, logvar=None):
-        '''
-        :param sample_size: Number of samples
-        :param mu: z mean, None for prior (init with zeros)
-        :param logvar: z logstd, None for prior (init with zeros)
-        :return:
-        '''
-        if mu is None:
-            mu = torch.zeros((sample_size, self.latent_dim)).to(self.device)
-        if logvar is None:
-            logvar = torch.zeros((sample_size, self.latent_dim)).to(self.device)
+        # parametrized q(y|x) = Cat(y|pi_phi(x)) -- outputs parametrization of categorical distribution
+        self.encoder_y = nn.Sequential(nn.Linear(x_space, hidden_space),
+                                       nn.Softplus(),
+                                       nn.Linear(hidden_space, hidden_space),
+                                       nn.Softplus(),
+                                       nn.Linear(hidden_space, number_of_classes))
 
-        up_sampled = self.z_sample(mu, logvar)
-        decoded_images = self.decoder(up_sampled)
-        return decoded_images
+        # parametrized q(z|x,y) = Normal(z|mu_phi(x,y), diag(sigma2_phi(x))) -- output parametrizations for mean and diagonal variance of a Normal distribution
+        self.encoder_z = nn.Sequential(nn.Linear(x_space + number_of_classes, hidden_space),
+                                       nn.Softplus(),
+                                       nn.Linear(hidden_space, hidden_space),
+                                       nn.Softplus(),
+                                       nn.Linear(hidden_space, 2 * latent_space))
 
+        # initialize weights to N(0, 0.001) and biases to 0 (cf SSL section 4.4)
+        for p in self.parameters():
+            p.data.normal_(0, 0.001)
+            if p.ndimension() == 1: p.data.fill_(0.)
 
-    def forward_with_classification(self, x, y):
-        embedded_y = self.label_embedding(y)
+    # q(z|x,y) = Normal(z|mu_phi(x,y), diag(sigma2_phi(x))) -- SSL paper eq 4
+    def encode_z(self, x, y):
+        xy = torch.cat([x, y], dim=1)
+        mu, logsigma = self.encoder_z(xy).chunk(2, dim=-1)
+        return D.Normal(mu, logsigma.exp())
 
-        encoded_image = self.encoder(x)
-        encoded_image_flatten = encoded_image.view(-1, self.sample_space_flatten)
-        encoded_image_flatten_with_y = torch.cat((encoded_image_flatten, embedded_y), dim=1)
-        mu = self.mu(encoded_image_flatten_with_y)
-        logvar = self.logvar(encoded_image_flatten_with_y)
-        z = self.reparametize(mu, logvar)
+    # q(y|x) = Categorical(y|pi_phi(x)) -- SSL paper eq 4
+    def encode_y(self, x):
+        return D.OneHotCategorical(logits=self.encoder_y(x))
+
+    # p(x|y,z) = Bernoulli
+    def decode(self, y, z):
+        yz = torch.cat([y, z], dim=1)
+
+        return D.continuous_bernoulli.ContinuousBernoulli(logits=self.decoder(yz))
+
+    # classification model q(y|x) using the trained q distribution
+    def forward(self, x):
+        y_probs = self.encode_y(x).probs
+        return y_probs.max(dim=1)[1]  # return pred labels = argmax
 
 
-
+def loss_components_fn(x, y, z, p_y, p_z, p_x_yz, q_z_xy):
+    # SSL paper eq 6 for an given y (observed or enumerated from q_y)
+    return - p_x_yz.log_prob(x).sum(1) \
+        - p_y.log_prob(y) \
+        - p_z.log_prob(z).sum(1) \
+        + q_z_xy.log_prob(z).sum(1)

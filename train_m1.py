@@ -2,64 +2,24 @@ import uuid
 from PIL import Image
 from sklearn.metrics import confusion_matrix, classification_report
 import torch, torchvision
+from torch.utils.data import DataLoader
 from torchvision import transforms
 import clearml_interface
 from tqdm import tqdm
 import params
 from m1_vae import M1_VAE, M1_VAE_Classifier
-import os
-
-
-def with_noise(x):
-    return x + torch.zeros_like(x).uniform_(0., 1. / 256.)
-
-
-def get_dataset(batch_size, dataset_name='mnist'):
-    transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Lambda(with_noise),  # dequantization
-        transforms.Normalize((0.,), (257. / 256.,)),  # rescales to [0,1]
-    ])
-
-    if dataset_name == 'mnist':
-        trainset = torchvision.datasets.MNIST(root='./data/MNIST',
-                                              train=True, download=True, transform=transform)
-        trainloader = torch.utils.data.DataLoader(trainset,
-                                                  batch_size=batch_size, shuffle=True, num_workers=2)
-        testset = torchvision.datasets.MNIST(root='./data/MNIST',
-                                             train=False, download=True, transform=transform)
-        testloader = torch.utils.data.DataLoader(testset,
-                                                 batch_size=batch_size, shuffle=False, num_workers=2)
-
-    return trainloader, testloader
-
-
-def get_device():
-    return torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
-
-def produce_images(vae, epoch, filename):
-    sample_shape = params.Params.SAMPLE_SPACE
-
-    samples = vae.sample(sample_size=100).cpu()
-    a, b = samples.min(), samples.max()
-    samples = (samples - a) / (b - a + 1e-10)
-    samples = samples.view(-1, *sample_shape)
-    write_file = f'./samples/{filename}/epoch{epoch}.png'
-    os.makedirs(os.path.dirname(write_file), exist_ok=True)
-    torchvision.utils.save_image(torchvision.utils.make_grid(samples), write_file)
-    image = Image.open(write_file)
-    clearml_interface.clearml_display_image(image, epoch, description='epoch{epoch}', series='generation_images')
+from params import Params
+from utilities import get_device, get_dataset, produce_images, create_semisupervised_datasets
 
 
 def train_generation(vae,
-          trainloader,
-          optimizer
-          ):
+                     trainloader,
+                     optimizer
+                     ):
     vae.train()  # set to training mode
     generation_loss_list, classification_loss_list = [], []
     for index, (inputs, labels) in enumerate(trainloader):
-        batch_size = params.Params.BATCH_SIZE
+        batch_size = Params.BATCH_SIZE
         inputs = inputs.to(vae.device)
 
         outputs, mu, logvar = vae(inputs)
@@ -90,33 +50,36 @@ def test_generation(vae, testloader, epoch, filename):
         # "avg_cls_loss": sum(cls_loss_list) / len(cls_loss_list)
     }
 
-def train_classification(vae, classifier_model, trainloader, optimizer, supervised_training_factor):
+
+def train_classification(vae, classifier_model, trainloader, optimizer):
     vae.eval()  # set to training mode
     classifier_model.train()
     classification_loss_list = []
     predictions, ground_truth = [], []
     for index, (inputs, labels) in enumerate(trainloader):
         batch_size = inputs.size(0)
-        if index % supervised_training_factor == 0:
-            inputs = inputs.to(vae.device)
-            outputs, mu, logvar = vae(inputs)
-            labels = labels.to(vae.device)
-            latent = vae.reparametize(mu, logvar)
-            latent = latent.detach().clone()
-            preds = classifier_model(latent)
-            predictions.extend(torch.argmax(preds, dim=-1).cpu().tolist())
-            ground_truth.extend(labels.cpu().tolist())
-            classification_loss = classifier_model.loss(preds, labels)
-            optimizer.zero_grad()
-            classification_loss.backward()
-            optimizer.step()
-            classification_loss_list.append(classification_loss.item() / batch_size)
+        # if index % supervised_training_factor == 0:
+        inputs = inputs.to(vae.device)
+        outputs, mu, logvar = vae(inputs)
+        labels = labels.to(vae.device)
+        latent = vae.reparametize(mu, logvar)
+        latent = latent.detach().clone()
+        preds = classifier_model(latent)
+        predictions.extend(torch.argmax(preds, dim=-1).cpu().tolist())
+        ground_truth.extend(labels.cpu().tolist())
+        classification_loss = classifier_model.loss(preds, labels)
+        optimizer.zero_grad()
+        classification_loss.backward()
+        optimizer.step()
+        classification_loss_list.append(classification_loss.item() / batch_size)
+    print("avg_cls_loss", str(sum(classification_loss_list) / len(classification_loss_list)))
 
     return {
         "avg_cls_loss": sum(classification_loss_list) / len(classification_loss_list),
         "predictions": predictions,
         "ground_truth": ground_truth
     }
+
 
 def test_classification(vae, classifier_model, testloader):
     vae.eval()
@@ -141,11 +104,13 @@ def test_classification(vae, classifier_model, testloader):
         "ground_truth": ground_truth
     }
 
+
 def log_results_generation(train_results, test_results, epoch):
     train_gen_loss = train_results['avg_gen_loss']
     test_gen_loss = test_results['avg_gen_loss']
     clearml_interface.add_point_to_graph('train_gen_loss', 'train_gen_loss', epoch, train_gen_loss)
     clearml_interface.add_point_to_graph('test_gen_loss', 'test_gen_loss', epoch, test_gen_loss)
+
 
 def log_results_classification(train_results, test_results, epoch):
     train_cls_loss = train_results['avg_cls_loss']
@@ -161,45 +126,42 @@ def log_results_classification(train_results, test_results, epoch):
     clearml_interface.add_text(test_classification_report, 'test_classification_report', epoch)
 
 
-
 def main():
     clearml_interface.clearml_init()
     device = get_device()
-    batch_size = params.Params.BATCH_SIZE
-    trainloader, testloader = get_dataset(batch_size, 'mnist')
-
-    generation_epochs = params.Params.GENERATION_EPOCHS
-    classification_epochs = params.Params.CLASSIFICATION_EPOCHS
-    latent_space = params.Params.LATENT_DIM
-    number_of_classes = params.Params.NUMBER_OF_CLASSES
+    batch_size = Params.BATCH_SIZE
+    trainset, testset = get_dataset('mnist')
+    n_labeld = Params.LABELED_COUNT
+    labeledloader, unlabeledloader = create_semisupervised_datasets(trainset,
+                                                                    n_labeld,
+                                                                    batch_size)
+    testloader = DataLoader(testset, batch_size=batch_size, shuffle=True)
 
     m1_model = \
-        M1_VAE(latent_space=params.Params.LATENT_DIM,
+        M1_VAE(latent_space=Params.LATENT_DIM,
                device=device,
-               convolutional_layers_encoder=params.Params.ENCODER_CONVOLUTIONS,
-               convolutional_layers_decoder=params.Params.DECODER_CONVOLUTIONS,
-               encoder_decoder_z_space=params.Params.ENCODER_DECODER_Z_SPACE
-               ).to(device)
+               convolutional_layers_encoder=Params.ENCODER_CONVOLUTIONS,
+               convolutional_layers_decoder=Params.DECODER_CONVOLUTIONS,
+               encoder_decoder_z_space=Params.ENCODER_DECODER_Z_SPACE).to(device)
 
     filename = str(uuid.uuid4())
     print('images uuid: ', filename)
 
-    optimizer = torch.optim.Adam(m1_model.parameters(), lr=params.Params.LR)
+    optimizer = torch.optim.Adam(m1_model.parameters(), lr=Params.LR)
 
-    classifier_model = M1_VAE_Classifier(latent_space=latent_space, num_of_classes=number_of_classes).to(device)
+    classifier_model = M1_VAE_Classifier(latent_space=Params.LATENT_DIM,
+                                         num_of_classes=Params.NUMBER_OF_CLASSES).to(device)
     classifier_optimizer = torch.optim.Adam(
-        classifier_model.parameters(), lr=params.Params.LR)
+        classifier_model.parameters(), lr=Params.LR)
 
-    supervised_training_factor = params.Params.SUPERVISED_DATASET_FACTOR
-
-    for e in tqdm(range(generation_epochs)):
-        train_report = train_generation(m1_model,   trainloader, optimizer)
-        test_report = test_generation(m1_model,  testloader, e, filename)
+    for e in tqdm(range(Params.GENERATION_EPOCHS)):
+        train_report = train_generation(m1_model, unlabeledloader, optimizer)
+        test_report = test_generation(m1_model, unlabeledloader, e, filename)
         log_results_generation(train_report, test_report, e)
-        produce_images(m1_model, generation_epochs, filename)
+        produce_images(m1_model, e, filename)
 
-    for e in tqdm(range(classification_epochs)):
-        train_report = train_classification(m1_model, classifier_model, trainloader, classifier_optimizer, supervised_training_factor)
+    for e in tqdm(range(Params.CLASSIFICATION_EPOCHS)):
+        train_report = train_classification(m1_model, classifier_model, labeledloader, classifier_optimizer)
         test_report = test_classification(m1_model, classifier_model, testloader)
         log_results_classification(train_report, test_report, e)
 

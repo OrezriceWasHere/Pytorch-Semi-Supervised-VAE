@@ -13,7 +13,7 @@ class M1_VAE_Classifier(nn.Module):
         super(M1_VAE_Classifier, self).__init__()
         self.classifier = nn.Sequential(
             nn.Linear(latent_space, num_of_classes),
-            nn.Softmax(dim=None)
+            nn.Softmax(dim=-1)
         )
 
     def forward(self, x):
