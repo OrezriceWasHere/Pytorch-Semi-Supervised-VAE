@@ -33,9 +33,10 @@ def train_generation(model,
         # get batch from respective dataloader
         if is_supervised:
             x, y = next(labeled_loader)
+            x = x.to(device).view(x.shape[0], -1)
 
             with torch.no_grad():
-                preds = model(x.view(x.shape[0], -1))
+                preds = model(x)
                 predictions.extend(preds.cpu().numpy())
                 ground_truth.extend(y.cpu().numpy())
 
@@ -45,7 +46,7 @@ def train_generation(model,
         else:
             x, y = next(unlabeled_loader)
             y = None
-        x = x.to(device).view(x.shape[0], -1)
+            x = x.to(device).view(x.shape[0], -1)
 
         # compute loss -- SSL paper eq 6, 7, 9
         q_y = model.encode_y(x)
