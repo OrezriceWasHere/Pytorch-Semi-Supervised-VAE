@@ -1,4 +1,6 @@
 import copy
+from uuid import uuid4
+
 from torch.utils.data import DataLoader
 from PIL import Image
 import torch, torchvision
@@ -52,8 +54,8 @@ def create_semisupervised_datasets(dataset, n_labeled, batch_size):
     assert dataset.train == True, 'Dataset must be the training set; assure dataset.train = True.'
 
     # compile new x and y and replace the dataset.train_data and train_labels with the
-    x = dataset.train_data
-    y = dataset.train_labels
+    x = dataset.data
+    y = dataset.targets
     n_x = x.shape[0]
     n_classes = len(torch.unique(y))
 
@@ -88,14 +90,14 @@ def create_semisupervised_datasets(dataset, n_labeled, batch_size):
     labeled_loader = torch.utils.data.DataLoader(labeled_dataset,
                                               batch_size=batch_size, shuffle=True, num_workers=2)
 
-    for x, y in labeled_loader:
-        print(x.shape)
-
     unlabeled_loader = torch.utils.data.DataLoader(unlabeled_dataset,
                                                 batch_size=batch_size, shuffle=True, num_workers=2)
     return labeled_loader, unlabeled_loader
 
-def one_hot(x, label_size):
-    out = torch.nn.functional.one_hot(len(x), label_size).to(x.device)
-    out[torch.arange(len(x)), x.squeeze()] = 1
-    return out
+def save_image(tensor, description, epoch, series="image_generation"):
+    uuid = str(uuid4())
+    write_file = f'./samples/uuid{uuid}.png'
+    os.makedirs(os.path.dirname(write_file), exist_ok=True)
+    torchvision.utils.save_image(torchvision.utils.make_grid(tensor), write_file)
+    image = Image.open(write_file)
+    clearml_interface.clearml_display_image(image, epoch, description=description, series=series)

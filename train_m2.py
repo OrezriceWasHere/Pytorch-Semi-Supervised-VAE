@@ -6,18 +6,20 @@ import clearml_interface
 from tqdm import tqdm
 from m2_vae import M2_VAE
 from params import Params
-from utilities import get_device, get_dataset, produce_images, create_semisupervised_datasets, one_hot
+from utilities import get_device, get_dataset, save_image, create_semisupervised_datasets
+import numpy as np
 
 
 def train_generation(model,
                      unlabeled_loader,
                      labeled_loader,
-                     optimizer, 
+                     optimizer,
                      device,
                      ):
     model.train()
 
     generation_loss_list = []
+    predictions, ground_truth = [], []
 
     n_batches = len(labeled_loader) + len(unlabeled_loader)
     n_unlabeled_per_labeled = n_batches // len(labeled_loader) + 1
@@ -31,7 +33,15 @@ def train_generation(model,
         # get batch from respective dataloader
         if is_supervised:
             x, y = next(labeled_loader)
+
+            with torch.no_grad():
+                preds = model(x.view(x.shape[0], -1))
+                predictions.extend(preds.cpu().numpy())
+                ground_truth.extend(y.cpu().numpy())
+
             y = torch.nn.functional.one_hot(y, Params.NUMBER_OF_CLASSES).to(device)
+
+
         else:
             x, y = next(unlabeled_loader)
             y = None
@@ -63,62 +73,58 @@ def train_generation(model,
         loss.backward()
         optimizer.step()
 
+    all_preds = np.asarray(predictions)
+    all_ground_truth = np.asarray(ground_truth)
 
     return {
-        "avg_gen_loss": -sum(generation_loss_list) / len(generation_loss_list)
+        "avg_gen_loss": -sum(generation_loss_list) / len(generation_loss_list),
+        "avg_cls_accuracy": np.sum(all_preds == all_ground_truth) / len(all_preds),
+        "ground_truth": all_ground_truth,
+        "predictions": all_preds
+
     }
 
 
-def train_classification(vae, classifier_model, trainloader, optimizer):
-    vae.eval()  # set to training mode
-    classifier_model.train()
-    classification_loss_list = []
+def test_generation(model,
+                    test_loader,
+                    device):
+    model.eval()
+
+    generation_loss_list = []
     predictions, ground_truth = [], []
-    for index, (inputs, labels) in enumerate(trainloader):
-        batch_size = inputs.size(0)
-        # if index % supervised_training_factor == 0:
-        inputs = inputs.to(vae.device)
-        outputs, mu, logvar = vae(inputs)
-        labels = labels.to(vae.device)
-        latent = vae.reparametize(mu, logvar)
-        latent = latent.detach().clone()
-        preds = classifier_model(latent)
-        predictions.extend(torch.argmax(preds, dim=-1).cpu().tolist())
-        ground_truth.extend(labels.cpu().tolist())
-        classification_loss = classifier_model.loss(preds, labels)
-        optimizer.zero_grad()
-        classification_loss.backward()
-        optimizer.step()
-        classification_loss_list.append(classification_loss.item() / batch_size)
-    print("avg_cls_loss", str(sum(classification_loss_list) / len(classification_loss_list)))
+
+
+    for x, y in test_loader:
+        # get batch from respective dataloader
+
+        preds = model(x.view(x.shape[0], -1))
+        predictions.extend(preds.cpu().numpy())
+        ground_truth.extend(y.cpu().numpy())
+
+        y = torch.nn.functional.one_hot(y, Params.NUMBER_OF_CLASSES).to(device)
+        x = x.to(device).view(x.shape[0], -1)
+
+        # compute loss -- SSL paper eq 6, 7, 9
+        q_y = model.encode_y(x)
+        # labeled data loss -- SSL paper eq 6 and eq 9
+        q_z_xy = model.encode_z(x, y)
+        z = q_z_xy.rsample()
+        p_x_yz = model.decode(y, z)
+        loss = M2_VAE.loss_components_fn(x, y, z, model.p_y, model.p_z, p_x_yz, q_z_xy)
+        loss -= Params.ALPHA * Params.LABELED_COUNT * q_y.log_prob(y)  # SSL eq 9
+        # unlabeled data loss -- SSL paper eq 7
+        loss = loss.mean(0)
+        generation_loss_list.append(loss.item())
+
+    all_preds = np.asarray(predictions)
+    all_ground_truth = np.asarray(ground_truth)
+
 
     return {
-        "avg_cls_loss": sum(classification_loss_list) / len(classification_loss_list),
-        "predictions": predictions,
-        "ground_truth": ground_truth
-    }
-
-
-def test_classification(vae, testloader):
-    vae.eval()
-    cls_loss_list = []
-    predictions, ground_truth = [], []
-    for index, (inputs, labels) in enumerate(testloader):
-        batch_size = inputs.size(0)
-        inputs = inputs.to(vae.device)
-        outputs, mu, logvar = vae(inputs)
-        labels = labels.to(vae.device)
-        latent = vae.reparametize(mu, logvar)
-        preds = classifier_model(latent)
-        predictions.extend(torch.argmax(preds, dim=-1).cpu().tolist())
-        ground_truth.extend(labels.cpu().tolist())
-        classification_loss = classifier_model.loss(preds, labels)
-        cls_loss_list.append(classification_loss.item() / batch_size)
-
-    return {
-        "avg_cls_loss": sum(cls_loss_list) / len(cls_loss_list),
-        "predictions": predictions,
-        "ground_truth": ground_truth
+        "avg_gen_loss": -sum(generation_loss_list) / len(generation_loss_list),
+        "avg_cls_accuracy": np.sum(all_preds == all_ground_truth) / len(all_preds),
+        "ground_truth": all_ground_truth,
+        "predictions": all_preds
     }
 
 
@@ -130,18 +136,39 @@ def log_results_generation(train_results, test_results, epoch):
 
 
 def log_results_classification(train_results, test_results, epoch):
-    train_cls_loss = train_results['avg_cls_loss']
-    test_cls_loss = test_results['avg_cls_loss']
-    clearml_interface.add_point_to_graph('train_cls_loss', 'train_cls_loss', epoch, train_cls_loss)
+    train_cls_accuracy = train_results['avg_cls_accuracy']
+    test_cls_accuracy = test_results['avg_cls_accuracy']
+    clearml_interface.add_point_to_graph('train_cls_accuracy', 'train_cls_accuracy', epoch, train_cls_accuracy)
+    clearml_interface.add_point_to_graph('test_cls_accuracy', 'test_cls_accuracy', epoch, test_cls_accuracy)
 
-    clearml_interface.add_point_to_graph('test_cls_loss', 'test_cls_loss', epoch, test_cls_loss)
     test_matrix = confusion_matrix(test_results['ground_truth'], test_results['predictions'])
     clearml_interface.add_confusion_matrix(test_matrix, 'test_confusion_matrix', 'test_confusion_matrix', epoch)
     train_matrix = confusion_matrix(train_results['ground_truth'], train_results['predictions'])
     clearml_interface.add_confusion_matrix(train_matrix, 'train_confusion_matrix', 'train_confusion_matrix', epoch)
     test_classification_report = classification_report(test_results['ground_truth'], test_results['predictions'])
-    clearml_interface.add_text(test_classification_report, 'test_classification_report', epoch)
+    message = f"Test Classification report: \n{test_classification_report}\nepoch={epoch}\n*******\n"
+    clearml_interface.add_text(message, epoch)
 
+def vis_styles(model, device, epoch):
+    model.eval()
+    assert Params.LATENT_DIM == 2, 'Style viualization requires z_dim=2'
+    y_dim = Params.NUMBER_OF_CLASSES
+    for y in range(2,5):
+        # y = (torch.tensor(y).unsqueeze(-1), args.y_dim).expand(100, args.y_dim).to(args.device)
+        y = torch.nn.functional.one_hot(torch.tensor(y).unsqueeze(-1), y_dim).expand(100, y_dim).to(device)
+
+        # order the first dim of the z latent
+        c = torch.linspace(-5, 5, 10).view(-1,1).repeat(1,10).reshape(-1,1)
+        z = torch.cat([c, torch.zeros_like(c)], dim=1).reshape(100, 2).to(device)
+
+        # combine into z and pass through decoder
+        x = model.decode(y, z).sample().view(y.shape[0], *Params.SAMPLE_SPACE)
+        save_image(x.cpu(), f'latent_var_grid_sample_c1_y{y[0].nonzero().item()}', epoch)
+
+        # order second dim of latent and pass through decoder
+        z = z.flip(1)
+        x = model.decode(y, z).sample().view(y.shape[0], *Params.SAMPLE_SPACE)
+        save_image(x.cpu(), f'latent_var_grid_sample_c2_y{y[0].nonzero().item()}', epoch)
 
 def main():
     clearml_interface.clearml_init()
@@ -169,9 +196,11 @@ def main():
 
     for e in tqdm(range(Params.GENERATION_EPOCHS)):
         train_report = train_generation(m2_model, unlabeledloader, labeledloader, optimizer, device)
-        test_report = test_generation(m2_model, unlabeledloader, e, filename)
+        test_report = test_generation(m2_model, testloader, device)
         log_results_generation(train_report, test_report, e)
-        produce_images(m2_model, e, filename)
+        log_results_classification(train_report, test_report, e)
+
+    vis_styles(m2_model, device, Params.GENERATION_EPOCHS)
 
 
 if __name__ == "__main__":

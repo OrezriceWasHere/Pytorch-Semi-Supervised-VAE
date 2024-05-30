@@ -262,7 +262,7 @@ def vis_styles(model, args):
     assert args.z_dim == 2, 'Style viualization requires z_dim=2'
 
     for y in range(2,5):
-        y = (torch.tensor(y).unsqueeze(-1), args.y_dim).expand(100, args.y_dim).to(args.device)
+        y = one_hot(torch.tensor(y).unsqueeze(-1), args.y_dim).expand(100, args.y_dim).to(args.device)
 
         # order the first dim of the z latent
         c = torch.linspace(-5, 5, 10).view(-1,1).repeat(1,10).reshape(-1,1)
@@ -283,14 +283,6 @@ def vis_styles(model, args):
                    os.path.join(args.output_dir, 'latent_var_grid_sample_c2_y{}.png'.format(y[0].nonzero().item())),
                    nrow=10)
 
-def clearml_save_image(tensor, description, series="image_generation"):
-    uuid = str(uuid4())
-    write_file = f'./samples/uuid{uuid}.png'
-    print("creating image at: ", write_file)
-    os.makedirs(os.path.dirname(write_file), exist_ok=True)
-    torchvision.utils.save_image(torchvision.utils.make_grid(tensor), write_file)
-    image = Image.open(write_file)
-    clearml_display_image(image, 1,description=description, series=series)
 
 
 # --------------------

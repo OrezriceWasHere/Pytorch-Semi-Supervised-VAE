@@ -23,7 +23,7 @@ def clearml_init():
         execution_task.set_parameters_as_dict(params.Params.__dict__)
 
         if RUNNING_REMOTE:
-            execution_task.execute_remotely(queue_name="cpu", exit_process=True)
+            execution_task.execute_remotely(queue_name="gpu", exit_process=True)
 
 
 def clearml_display_image(image, iteration, series, description):
@@ -45,6 +45,6 @@ def add_confusion_matrix(matrix, title, series, iteration):
         execution_task.get_logger().report_confusion_matrix(title, series=series, matrix=matrix, iteration=iteration)
 
 
-def add_text(text, title, iteration):
+def add_text(text, iteration):
     if ALLOW_CLEARML:
-        execution_task.get_logger().report_text(title, text, iteration=iteration)
+        execution_task.get_logger().report_text(text, iteration=iteration)

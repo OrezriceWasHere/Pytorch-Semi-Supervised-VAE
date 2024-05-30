@@ -123,7 +123,7 @@ def log_results_classification(train_results, test_results, epoch):
     train_matrix = confusion_matrix(train_results['ground_truth'], train_results['predictions'])
     clearml_interface.add_confusion_matrix(train_matrix, 'train_confusion_matrix', 'train_confusion_matrix', epoch)
     test_classification_report = classification_report(test_results['ground_truth'], test_results['predictions'])
-    clearml_interface.add_text(test_classification_report, 'test_classification_report', epoch)
+    clearml_interface.add_text(test_classification_report,  epoch)
 
 
 def main():
