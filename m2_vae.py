@@ -37,29 +37,32 @@ class M2_VAE(Module):
         self.p_z = D.Normal(torch.tensor(0., device=device), torch.tensor(1., device=device))
 
         # parametrized data likelihood p(x|y,z)
-        self.decoder = nn.Sequential(nn.Linear(latent_space + number_of_classes, hidden_space),
-                                     nn.Softplus(),
-                                     nn.Linear(hidden_space, hidden_space),
-                                     nn.Softplus(),
-                                     nn.Linear(hidden_space, x_space))
+        self.decoder = nn.Sequential(
+            nn.Linear(latent_space + number_of_classes, hidden_space),
+            nn.Softplus(),
+            nn.Linear(hidden_space, hidden_space),
+            nn.Softplus(),
+            nn.Linear(hidden_space, x_space))
 
         # --------------------
         # q model -- SSL paper eq 4
         # --------------------
 
         # parametrized q(y|x) = Cat(y|pi_phi(x)) -- outputs parametrization of categorical distribution
-        self.encoder_y = nn.Sequential(nn.Linear(x_space, hidden_space),
-                                       nn.Softplus(),
-                                       nn.Linear(hidden_space, hidden_space),
-                                       nn.Softplus(),
-                                       nn.Linear(hidden_space, number_of_classes))
+        self.encoder_y = nn.Sequential(
+            nn.Linear(x_space, hidden_space),
+            nn.Softplus(),
+            nn.Linear(hidden_space, hidden_space),
+            nn.Softplus(),
+            nn.Linear(hidden_space, number_of_classes))
 
         # parametrized q(z|x,y) = Normal(z|mu_phi(x,y), diag(sigma2_phi(x))) -- output parametrizations for mean and diagonal variance of a Normal distribution
-        self.encoder_z = nn.Sequential(nn.Linear(x_space + number_of_classes, hidden_space),
-                                       nn.Softplus(),
-                                       nn.Linear(hidden_space, hidden_space),
-                                       nn.Softplus(),
-                                       nn.Linear(hidden_space, 2 * latent_space))
+        self.encoder_z = nn.Sequential(
+            nn.Linear(x_space + number_of_classes, hidden_space),
+            nn.Softplus(),
+            nn.Linear(hidden_space, hidden_space),
+            nn.Softplus(),
+            nn.Linear(hidden_space, 2 * latent_space))
 
         # initialize weights to N(0, 0.001) and biases to 0 (cf SSL section 4.4)
         for p in self.parameters():
