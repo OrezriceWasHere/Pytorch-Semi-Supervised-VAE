@@ -9,31 +9,42 @@ RUNNING_REMOTE = True if env.get("RUNNING_REMOTE") == "yes" else False
 def clearml_init():
     global execution_task
     if ALLOW_CLEARML:
-        experiment_desc = input("what is the experiment description?")
+
         execution_task = Task.init(project_name="Pytorch Semi Supervised VAE",
-                                   task_name=experiment_desc,
+                                   task_name="m1 with 10000 epochs, lr = 1e-4",
                                    task_type=Task.TaskTypes.testing,
-                                   reuse_last_task_id=False)
+                                   reuse_last_task_id=False,
+                                   )
+
+        if execution_task.running_locally() and RUNNING_REMOTE:
+            name = input("enter description for task:\n")
+            execution_task.set_name(name)
+
         execution_task.set_parameters_as_dict(params.Params.__dict__)
 
         if RUNNING_REMOTE:
             execution_task.execute_remotely(queue_name="gpu", exit_process=True)
 
 
-def clearml_display_image(image, iteration, description, series):
+def clearml_display_image(image, iteration, series, description):
     if ALLOW_CLEARML:
-        execution_task.get_logger().report_image(description, iteration=iteration,
-                                                 image=image, series=series)
+        execution_task.get_logger().report_image(description,
+
+                                                 image=image,
+                                                 iteration=iteration,
+                                                 series=series)
 
 
 def add_point_to_graph(title, series, x, y):
     if ALLOW_CLEARML:
         execution_task.get_logger().report_scalar(title, series, value=y, iteration=x)
 
+
 def add_confusion_matrix(matrix, title, series, iteration):
     if ALLOW_CLEARML:
         execution_task.get_logger().report_confusion_matrix(title, series=series, matrix=matrix, iteration=iteration)
 
-def add_text(text, title, iteration):
+
+def add_text(text, iteration):
     if ALLOW_CLEARML:
-        execution_task.get_logger().report_text(title, text, iteration=iteration)
+        execution_task.get_logger().report_text(text, iteration=iteration)

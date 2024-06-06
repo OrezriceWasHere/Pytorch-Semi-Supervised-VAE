@@ -9,7 +9,7 @@ import os
 import argparse
 from uuid import uuid4
 
-from PIL.Image import Image
+from PIL import Image
 from tqdm import tqdm
 import pprint
 import copy
@@ -25,7 +25,7 @@ from torch.utils.data import DataLoader
 from torchvision.datasets import MNIST
 from torchvision.utils import save_image, make_grid
 
-from clearml_interface import clearml_init
+from clearml_interface import clearml_init, clearml_display_image
 
 parser = argparse.ArgumentParser()
 
@@ -52,7 +52,7 @@ parser.add_argument('--hidden_dim', type=int, default=500, help='Size of the hid
 # training params
 parser.add_argument('--n_labeled', type=int, default=3000, help='Number of labeled training examples in the dataset')
 parser.add_argument('--batch_size', type=int, default=100)
-parser.add_argument('--n_epochs', type=int, default=100, help='Number of epochs to train.')
+parser.add_argument('--n_epochs', type=int, default=20, help='Number of epochs to train.')
 parser.add_argument('--lr', type=float, default=3e-4, help='Learning rate')
 parser.add_argument('--alpha', type=float, default=0.1, help='Classifier loss multiplier controlling generative vs. discriminative learning.')
 
@@ -110,7 +110,7 @@ def fetch_dataloaders(args):
     kwargs = {'num_workers': 1, 'pin_memory': True} if args.device.type is 'cuda' else {}
 
     def get_dataset(train):
-        return MNIST(root=args.data_dir, train=train, transform=transforms)
+        return MNIST(root=args.data_dir, train=train, transform=transforms, download=True)
 
     def get_dl(dataset):
         return DataLoader(dataset, batch_size=args.batch_size, shuffle=dataset.train, drop_last=True, **kwargs)
@@ -123,7 +123,7 @@ def fetch_dataloaders(args):
 
 
 def one_hot(x, label_size):
-    out = torch.zeros(len(x), label_size).to(x.device)
+    out = torch.one_hot(len(x), label_size).to(x.device)
     out[torch.arange(len(x)), x.squeeze()] = 1
     return out
 
@@ -131,90 +131,6 @@ def one_hot(x, label_size):
 # Model
 # --------------------
 
-class SSVAE(nn.Module):
-    """
-    Data model (SSL paper eq 2):
-        p(y) = Cat(y|pi)
-        p(z) = Normal(z|0,1)
-        p(x|y,z) = f(x; z,y,theta)
-
-    Recognition model / approximate posterior q_phi (SSL paper eq 4):
-        q(y|x) = Cat(y|pi_phi(x))
-        q(z|x,y) = Normal(z|mu_phi(x,y), diag(sigma2_phi(x)))
-
-
-    """
-    def __init__(self, args):
-        super().__init__()
-        C, H, W = args.image_dims
-        x_dim = C * H * W
-
-        # --------------------
-        # p model -- SSL paper generative semi supervised model M2
-        # --------------------
-
-        self.p_y = D.OneHotCategorical(probs=1 / args.y_dim * torch.ones(1,args.y_dim, device=args.device))
-        self.p_z = D.Normal(torch.tensor(0., device=args.device), torch.tensor(1., device=args.device))
-
-        # parametrized data likelihood p(x|y,z)
-        self.decoder = nn.Sequential(nn.Linear(args.z_dim + args.y_dim, args.hidden_dim),
-                                     nn.Softplus(),
-                                     nn.Linear(args.hidden_dim, args.hidden_dim),
-                                     nn.Softplus(),
-                                     nn.Linear(args.hidden_dim, x_dim))
-
-        # --------------------
-        # q model -- SSL paper eq 4
-        # --------------------
-
-        # parametrized q(y|x) = Cat(y|pi_phi(x)) -- outputs parametrization of categorical distribution
-        self.encoder_y = nn.Sequential(nn.Linear(x_dim, args.hidden_dim),
-                                       nn.Softplus(),
-                                       nn.Linear(args.hidden_dim, args.hidden_dim),
-                                       nn.Softplus(),
-                                       nn.Linear(args.hidden_dim, args.y_dim))
-
-        # parametrized q(z|x,y) = Normal(z|mu_phi(x,y), diag(sigma2_phi(x))) -- output parametrizations for mean and diagonal variance of a Normal distribution
-        self.encoder_z = nn.Sequential(nn.Linear(x_dim + args.y_dim, args.hidden_dim),
-                                       nn.Softplus(),
-                                       nn.Linear(args.hidden_dim, args.hidden_dim),
-                                       nn.Softplus(),
-                                       nn.Linear(args.hidden_dim, 2 * args.z_dim))
-
-
-        # initialize weights to N(0, 0.001) and biases to 0 (cf SSL section 4.4)
-        for p in self.parameters():
-            p.data.normal_(0, 0.001)
-            if p.ndimension() == 1: p.data.fill_(0.)
-
-    # q(z|x,y) = Normal(z|mu_phi(x,y), diag(sigma2_phi(x))) -- SSL paper eq 4
-    def encode_z(self, x, y):
-        xy = torch.cat([x, y], dim=1)
-        mu, logsigma = self.encoder_z(xy).chunk(2, dim=-1)
-        return D.Normal(mu, logsigma.exp())
-
-    # q(y|x) = Categorical(y|pi_phi(x)) -- SSL paper eq 4
-    def encode_y(self, x):
-        return D.OneHotCategorical(logits=self.encoder_y(x))
-
-    # p(x|y,z) = Bernoulli
-    def decode(self, y, z):
-        yz = torch.cat([y, z], dim=1)
-
-        return D.continuous_bernoulli.ContinuousBernoulli(logits=self.decoder(yz))
-
-    # classification model q(y|x) using the trained q distribution
-    def forward(self, x):
-        y_probs = self.encode_y(x).probs
-        return y_probs.max(dim=1)[1]  # return pred labels = argmax
-
-
-def loss_components_fn(x, y, z, p_y, p_z, p_x_yz, q_z_xy):
-    # SSL paper eq 6 for an given y (observed or enumerated from q_y)
-    return - p_x_yz.log_prob(x).sum(1) \
-           - p_y.log_prob(y) \
-           - p_z.log_prob(z).sum(1) \
-           + q_z_xy.log_prob(z).sum(1)
 
 
 # --------------------
@@ -367,14 +283,6 @@ def vis_styles(model, args):
                    os.path.join(args.output_dir, 'latent_var_grid_sample_c2_y{}.png'.format(y[0].nonzero().item())),
                    nrow=10)
 
-def clearml_save_image(tensor, description):
-    uuid = str(uuid4())
-    write_file = f'./samples/uuid{uuid}.png'
-    print("creating image at: ", write_file)
-    os.makedirs(os.path.dirname(write_file), exist_ok=True)
-    torchvision.utils.save_image(torchvision.utils.make_grid(tensor), write_file)
-    image = Image.open(write_file)
-    clearml_interface.clearml_display_image(image, 1, description, series='generation_images')
 
 
 # --------------------
@@ -415,14 +323,11 @@ if __name__ == '__main__':
     print(pprint.pformat(args.__dict__), file=open(args.results_file, 'a'))
     print(model, file=open(args.results_file, 'a'))
 
-    if args.train:
-        train_and_evaluate(model, labeled_dataloader, unlabeled_dataloader, test_dataloader, loss_components_fn, optimizer, args)
+    train_and_evaluate(model, labeled_dataloader, unlabeled_dataloader, test_dataloader, loss_components_fn, optimizer, args)
 
-    if args.evaluate:
-        evaluate(model, test_dataloader, None, args)
+    # evaluate(model, test_dataloader, None, args)
 
-    if args.generate:
-        generate(model, test_dataloader.dataset, args)
+    # if args.generate:
+    #     generate(model, test_dataloader.dataset, args)
 
-    if args.vis_styles:
-        vis_styles(model, args)
+    vis_styles(model, args)

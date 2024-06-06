@@ -9,11 +9,11 @@ import torch.nn as nn
 class M1_VAE_Classifier(nn.Module):
 
 
-    def __init__(self, latent_dim, num_of_classes):
+    def __init__(self, latent_space, num_of_classes):
         super(M1_VAE_Classifier, self).__init__()
         self.classifier = nn.Sequential(
-            nn.Linear(latent_dim, num_of_classes),
-            nn.Softmax(dim=None)
+            nn.Linear(latent_space, num_of_classes),
+            nn.Softmax(dim=-1)
         )
 
     def forward(self, x):
@@ -24,35 +24,39 @@ class M1_VAE_Classifier(nn.Module):
 
 class M1_VAE(nn.Module):
     def __init__(self,
-                 latent_dim,
+                 latent_space,
                  device,
                  convolutional_layers_encoder,
                  convolutional_layers_decoder,
-                 sample_space_flatten,
-                 sample_space):
+                 encoder_decoder_z_space):
         """Initialize a VAE.
 
         Args:
-            latent_dim: dimension of embedding
+            latent_space: dimension of embedding
             device: run on cpu or gpu
         """
+
         super(M1_VAE, self).__init__()
         self.device = device
-        self.latent_dim = latent_dim
-        self.sample_space_flatten = sample_space_flatten
-        self.sample_space = sample_space
+        self.latent_dim = latent_space
+        self.encoder_decoder_z_space = encoder_decoder_z_space
+
+        C, H, W = encoder_decoder_z_space
+        encoder_decoder_z_space_flatten = C * H * W
+        self.encoder_decoder_z_space_flatten = encoder_decoder_z_space_flatten
+
         self.encoder = nn.Sequential(
-            nn.Conv2d(*convolutional_layers_encoder[0:5]),
+            nn.Conv2d(*convolutional_layers_encoder[:5]),
             nn.ReLU(True),
             nn.Conv2d(*convolutional_layers_encoder[5:10]),
             nn.ReLU(True),
-            nn.Conv2d(*convolutional_layers_encoder[10:15]),
+            nn.Conv2d(*convolutional_layers_encoder[10:]),
         )
 
-        self.mu = nn.Linear(sample_space_flatten, latent_dim)
-        self.logvar = nn.Linear(sample_space_flatten, latent_dim)
+        self.mu = nn.Linear(encoder_decoder_z_space_flatten, latent_space)
+        self.logvar = nn.Linear(encoder_decoder_z_space_flatten, latent_space)
 
-        self.upsample = nn.Linear(latent_dim, sample_space_flatten)
+        self.upsample = nn.Linear(latent_space, encoder_decoder_z_space_flatten)
         self.decoder = nn.Sequential(
             nn.ConvTranspose2d(*convolutional_layers_decoder[:5]),
             nn.ReLU(True),
@@ -89,7 +93,7 @@ class M1_VAE(nn.Module):
     def z_sample(self, mu, logvar):
         latent_result = self.reparametize(mu, logvar)
         upsampled = self.upsample(latent_result)
-        upsampled = upsampled.view(-1, *self.sample_space)
+        upsampled = upsampled.view(-1, *self.encoder_decoder_z_space)
         return upsampled
 
     def loss(self, x, recon, mu, logvar):
@@ -101,8 +105,8 @@ class M1_VAE(nn.Module):
     def forward(self, x):
         encoded_image = self.encoder(x)
 
-        mu = self.mu(encoded_image.view(-1, self.sample_space_flatten))
-        logvar = self.logvar(encoded_image.view(-1, self.sample_space_flatten))
-        z = self.z_sample(mu, logvar)
-        recon = self.decoder(z)
+        mu = self.mu(encoded_image.view(-1, self.encoder_decoder_z_space_flatten))
+        logvar = self.logvar(encoded_image.view(-1, self.encoder_decoder_z_space_flatten))
+        upsampled_z = self.z_sample(mu, logvar)
+        recon = self.decoder(upsampled_z)
         return recon, mu, logvar
