@@ -16,7 +16,7 @@ def clearml_init():
                                    reuse_last_task_id=False,
                                    )
 
-        if execution_task.running_locally():
+        if execution_task.running_locally() and RUNNING_REMOTE:
             name = input("enter description for task:\n")
             execution_task.set_name(name)
 

@@ -8,7 +8,7 @@ from m2_vae import M2_VAE
 from params import Params
 from utilities import get_device, get_dataset, save_image, create_semisupervised_datasets
 import numpy as np
-
+from torchvision.utils import  make_grid
 
 def train_generation(model,
                      unlabeled_loader,
@@ -97,13 +97,12 @@ def test_generation(model,
 
     for x, y in test_loader:
         # get batch from respective dataloader
-
-        preds = model(x.view(x.shape[0], -1))
+        x = x.to(device).view(x.shape[0], -1)
+        preds = model(x)
         predictions.extend(preds.cpu().numpy())
         ground_truth.extend(y.cpu().numpy())
 
         y = torch.nn.functional.one_hot(y, Params.NUMBER_OF_CLASSES).to(device)
-        x = x.to(device).view(x.shape[0], -1)
 
         # compute loss -- SSL paper eq 6, 7, 9
         q_y = model.encode_y(x)
@@ -150,6 +149,7 @@ def log_results_classification(train_results, test_results, epoch):
     message = f"Test Classification report: \n{test_classification_report}\nepoch={epoch}\n*******\n"
     clearml_interface.add_text(message, epoch)
 
+
 def vis_styles(model, device, epoch):
     model.eval()
     assert Params.LATENT_DIM == 2, 'Style viualization requires z_dim=2'
@@ -170,6 +170,36 @@ def vis_styles(model, device, epoch):
         z = z.flip(1)
         x = model.decode(y, z).sample().view(y.shape[0], *Params.SAMPLE_SPACE)
         save_image(x.cpu(), f'latent_var_grid_sample_c2_y{y[0].nonzero().item()}', epoch)
+
+
+
+def generate(model, test_dataset, device, epoch):
+    n_samples_per_label = 10
+
+    # some interesting samples per paper implementation
+    idxs = [7910, 8150, 3623, 2645, 4066, 9660, 5083, 948, 2595, 2]
+
+    x = torch.stack([test_dataset[i][0] for i in idxs], dim=0).to(device)
+    y = torch.tensor([test_dataset[i][1] for i in idxs]).to(device)
+    y = torch.nn.functional.one_hot(y, Params.NUMBER_OF_CLASSES).to(device)
+
+    q_z_xy = model.encode_z(x.view(n_samples_per_label, -1), y)
+    z = q_z_xy.loc
+    z = z.repeat(Params.NUMBER_OF_CLASSES, 1, 1).transpose(0, 1).contiguous().view(-1, Params.LATENT_DIM)
+
+    # hold z constant and vary y:
+    y = (torch.eye(Params.NUMBER_OF_CLASSES)
+         .repeat(n_samples_per_label, 1)
+         .to(device))
+    generated_x = model.decode(y, z).sample().view(n_samples_per_label, Params.NUMBER_OF_CLASSES, *Params.SAMPLE_SPACE)
+    generated_x = generated_x.contiguous().view(-1, *Params.SAMPLE_SPACE)  # out (n_samples * n_label, C, H, W)
+
+    x = make_grid(x.cpu(), nrow=1)
+    spacer = torch.ones(x.shape[0], x.shape[1], 5)
+    generated_x = make_grid(generated_x.cpu(), nrow=Params.NUMBER_OF_CLASSES)
+    image = torch.cat([x, spacer, generated_x], dim=-1)
+    save_image(image.cpu(), f'analogies_sample_at_epoch_{epoch}', epoch)
+
 
 def main():
     clearml_interface.clearml_init()
@@ -200,8 +230,7 @@ def main():
         test_report = test_generation(m2_model, testloader, device)
         log_results_generation(train_report, test_report, e)
         log_results_classification(train_report, test_report, e)
-
-    vis_styles(m2_model, device, Params.GENERATION_EPOCHS)
+        generate(m2_model, testset, device, e)
 
 
 if __name__ == "__main__":
