@@ -11,7 +11,7 @@ def clearml_init():
     if ALLOW_CLEARML:
 
         execution_task = Task.init(project_name="Pytorch Semi Supervised VAE",
-                                   task_name="m1 with 10000 epochs, lr = 1e-4",
+                                   task_name="Name me!",
                                    task_type=Task.TaskTypes.testing,
                                    reuse_last_task_id=False,
                                    )
