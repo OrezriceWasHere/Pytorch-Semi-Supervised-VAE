@@ -64,10 +64,6 @@ class M2_VAE(Module):
             nn.Softplus(),
             nn.Linear(hidden_space, 2 * latent_space))
 
-        # initialize weights to N(0, 0.001) and biases to 0 (cf SSL section 4.4)
-        for p in self.parameters():
-            p.data.normal_(0, 0.001)
-            if p.ndimension() == 1: p.data.fill_(0.)
 
     # q(z|x,y) = Normal(z|mu_phi(x,y), diag(sigma2_phi(x))) -- SSL paper eq 4
     def encode_z(self, x, y):
